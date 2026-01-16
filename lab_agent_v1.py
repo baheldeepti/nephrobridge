@@ -18,7 +18,9 @@ MODEL_ID = (
     else "google/gemma-2b-it"
 )
 
-DATA_DIR = Path("DATA")
+BASE_DIR = Path(__file__).resolve().parent
+DATA_DIR = BASE_DIR / "DATA"
+
 
 STAGE_TO_FILE = {
     "post_transplant": "patient_timeline_post_transplant.json",
