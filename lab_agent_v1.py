@@ -1,14 +1,24 @@
 import json
 import torch
 import gc
+import os
 from pathlib import Path
 from transformers import AutoTokenizer, AutoModelForCausalLM
 
 # --------------------------------------------------
-# CONFIG
+# CONFIG (Hackathon-compliant)
 # --------------------------------------------------
-MODEL_ID = "google/gemma-2b-it"  # ✅ LOCAL SAFE MODEL
-DATA_DIR = Path("data")
+
+# 🔁 Automatically switch model based on environment
+USE_MEDGEMMA = os.getenv("USE_MEDGEMMA", "false").lower() == "true"
+
+MODEL_ID = (
+    "google/medgemma-1.5-4b-it"
+    if USE_MEDGEMMA
+    else "google/gemma-2b-it"
+)
+
+DATA_DIR = Path("DATA")
 
 STAGE_TO_FILE = {
     "post_transplant": "patient_timeline_post_transplant.json",
@@ -18,7 +28,7 @@ STAGE_TO_FILE = {
 
 
 # --------------------------------------------------
-# Prompt Builder (stage-aware, single reusable agent)
+# Prompt Builder (stage-aware, reusable agent)
 # --------------------------------------------------
 def build_user_prompt(stage: str, labs: list) -> str:
     lab_block = "\n".join(
@@ -64,7 +74,7 @@ and FILL ALL SECTIONS with real text:
 
 
 # --------------------------------------------------
-# Sanitizer (last line of defense)
+# Sanitizer (final safety layer)
 # --------------------------------------------------
 def sanitize(text: str) -> str:
     forbidden = [
@@ -93,13 +103,19 @@ def run_lab_agent(stage: str):
 
     model = AutoModelForCausalLM.from_pretrained(
         MODEL_ID,
-        dtype=torch.float32,          # ✅ stable on Mac CPU
-        device_map={"": "cpu"},
+        dtype=torch.float16 if USE_MEDGEMMA else torch.float32,
+        device_map="auto" if USE_MEDGEMMA else {"": "cpu"},
         low_cpu_mem_usage=True,
     )
 
     messages = [
-        {"role": "system", "content": "You are NephroBridge, a patient-facing explanation assistant."},
+        {
+            "role": "system",
+            "content": (
+                "You are NephroBridge, a patient-facing explanation assistant. "
+                "You explain medical information clearly without giving advice."
+            ),
+        },
         {"role": "user", "content": prompt},
     ]
 
@@ -107,7 +123,7 @@ def run_lab_agent(stage: str):
         messages, tokenize=False, add_generation_prompt=True
     )
 
-    # 🔑 FORCE CONTINUATION
+    # 🔑 Force continuation
     chat += "\n🧠 Key takeaways\n- "
 
     inputs = tokenizer(chat, return_tensors="pt", add_special_tokens=False)
@@ -115,7 +131,7 @@ def run_lab_agent(stage: str):
     with torch.no_grad():
         output = model.generate(
             **inputs,
-            max_new_tokens=250,
+            max_new_tokens=180 if USE_MEDGEMMA else 250,
             do_sample=False,
             num_beams=1,
             repetition_penalty=1.1,
@@ -127,7 +143,6 @@ def run_lab_agent(stage: str):
     text = tokenizer.decode(output[0], skip_special_tokens=True)
     text = sanitize(text)
 
-    # Trim everything before first header
     idx = text.find("🧠 Key takeaways")
     if idx != -1:
         text = text[idx:]
@@ -139,7 +154,7 @@ def run_lab_agent(stage: str):
 
 
 # --------------------------------------------------
-# CLI ENTRYPOINT (asks user for stage)
+# CLI ENTRYPOINT
 # --------------------------------------------------
 if __name__ == "__main__":
     print("\nWhich kidney journey stage are you in?")
@@ -148,7 +163,7 @@ if __name__ == "__main__":
     stage = input("Enter stage: ").strip().lower()
 
     if stage not in STAGE_TO_FILE:
-        raise ValueError("Invalid stage. Choose: post_transplant, advanced_ckd, dialysis")
+        raise ValueError("Invalid stage")
 
     print("\n" + "=" * 60)
     print(f"NEPHROBRIDGE — {stage.upper()}")
