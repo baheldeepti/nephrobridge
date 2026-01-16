@@ -1,0 +1,41 @@
+{
+  "kidney_journey_stage": "advanced_ckd",
+  "recent_hospital_stay": {
+    "reason_for_admission": "Worsening kidney function and fluid overload"
+  },
+  "labs_over_time": [
+    {
+      "date": "2025-01-10",
+      "lab_name": "Creatinine",
+      "value": 3.1,
+      "unit": "mg/dL",
+      "reference_range": "0.6–1.3"
+    },
+    {
+      "date": "2025-02-10",
+      "lab_name": "Creatinine",
+      "value": 3.6,
+      "unit": "mg/dL",
+      "reference_range": "0.6–1.3"
+    },
+    {
+      "date": "2025-02-10",
+      "lab_name": "Potassium",
+      "value": 5.4,
+      "unit": "mmol/L",
+      "reference_range": "3.5–5.1"
+    }
+  ],
+  "medications": {
+    "previous": ["Lisinopril", "Furosemide"],
+    "current": ["Furosemide", "Sodium bicarbonate"]
+  },
+  "discharge_instructions": [
+    "Follow up with nephrology in 2 weeks",
+    "Repeat labs before next visit"
+  ],
+  "pending_items": {
+    "labs": ["BMP"],
+    "appointments": ["Nephrology follow-up"]
+  }
+}

@@ -1,0 +1,73 @@
+{
+  "patient_id": "PT-001",
+  "kidney_journey_stage": "post_transplant",
+
+  "patient_context": {
+    "description": "Adult kidney transplant recipient recently discharged after a hospital stay.",
+    "days_since_transplant": 45
+  },
+
+  "recent_hospital_stay": {
+    "admission_date": "2026-01-05",
+    "discharge_date": "2026-01-09",
+    "reason_for_admission": "Elevated creatinine and dehydration",
+    "discharge_summary": "Patient admitted for evaluation of rising creatinine. Imaging and labs ruled out acute obstruction. Treated with IV fluids and medication adjustment. Discharged in stable condition."
+  },
+
+  "labs_over_time": [
+    {
+      "date": "2026-01-04",
+      "lab_name": "Creatinine",
+      "value": 1.4,
+      "unit": "mg/dL",
+      "reference_range": "0.6–1.3"
+    },
+    {
+      "date": "2026-01-06",
+      "lab_name": "Creatinine",
+      "value": 1.9,
+      "unit": "mg/dL",
+      "reference_range": "0.6–1.3"
+    },
+    {
+      "date": "2026-01-08",
+      "lab_name": "Creatinine",
+      "value": 1.6,
+      "unit": "mg/dL",
+      "reference_range": "0.6–1.3"
+    }
+  ],
+
+  "medications": [
+    {
+      "name": "Tacrolimus",
+      "previous_dose": "3 mg twice daily",
+      "current_dose": "2 mg twice daily",
+      "change_context": "Dose adjusted during hospital stay based on lab results."
+    },
+    {
+      "name": "Mycophenolate",
+      "previous_dose": "1000 mg twice daily",
+      "current_dose": "1000 mg twice daily",
+      "change_context": "No change."
+    }
+  ],
+
+  "follow_up_plan": {
+    "pending_labs": [
+      "Creatinine",
+      "Tacrolimus trough level"
+    ],
+    "appointments": [
+      {
+        "type": "Transplant nephrology follow-up",
+        "scheduled_date": "2026-01-15"
+      }
+    ],
+    "patient_questions": [
+      "Why did my creatinine go up after transplant?",
+      "Why was my tacrolimus dose changed?",
+      "What symptoms should I watch for at home?"
+    ]
+  }
+}
