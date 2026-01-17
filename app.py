@@ -1,205 +1,159 @@
-# app.py
+# app.py — NephroBridge Hackathon Demo
 import json
+import os
 from pathlib import Path
 import streamlit as st
 import pandas as pd
 
-DATA_DIR = Path("DATA")
+from lab_agent_v1 import run_lab_agent_from_timeline
+from medication_agent import run_medication_agent
+from followup_agent import run_followup_agent
+
+# --------------------------------------------------
+# CONFIG
+# --------------------------------------------------
+BASE_DIR = Path(__file__).resolve().parent
+DATA_DIR = BASE_DIR / "DATA"
 DATA_DIR.mkdir(exist_ok=True)
 
-OUTPUT_PATH = DATA_DIR / "patient_timeline_user.json"
+USE_MEDGEMMA = os.getenv("USE_MEDGEMMA", "false").lower() == "true"
 
-STAGES = {
-    "Post-transplant": "post_transplant",
-    "Advanced CKD (not on dialysis)": "advanced_ckd",
-    "Dialysis": "dialysis",
-}
+st.set_page_config(
+    page_title="NephroBridge",
+    page_icon="🧠",
+    layout="wide"
+)
 
-st.set_page_config(page_title="NephroBridge", page_icon="🧠", layout="wide")
-
+# --------------------------------------------------
+# HEADER
+# --------------------------------------------------
 st.title("NephroBridge")
-st.caption("A calm, patient-first explanation tool for kidney labs, meds, and follow-ups.")
+st.caption(
+    "A human-centered AI assistant using Google MedGemma "
+    "to explain kidney labs, medications, and follow-ups."
+)
 
-st.markdown("### Step 1 — Tell us where you are in your kidney journey")
-stage_label = st.radio(
+st.markdown(
+    f"**Model in use:** {'MedGemma (HAI-DEF)' if USE_MEDGEMMA else 'Gemma-2B (local dev)'}"
+)
+
+# --------------------------------------------------
+# STAGE SELECTION
+# --------------------------------------------------
+st.markdown("## 1️⃣ Where are you in your kidney journey?")
+stage = st.radio(
     "Choose one:",
-    list(STAGES.keys()),
+    ["post_transplant", "advanced_ckd", "dialysis"],
     horizontal=True
 )
-stage = STAGES[stage_label]
 
-st.divider()
-st.markdown("### Step 2 — Add your information")
+# --------------------------------------------------
+# DATA INPUT
+# --------------------------------------------------
+st.markdown("## 2️⃣ Add your information")
 mode = st.radio(
     "How would you like to provide your info?",
-    ["Fill a simple form", "Upload a file (CSV or JSON)"],
+    ["Fill a simple form", "Upload a CSV or JSON file"],
     horizontal=True
 )
-
-def normalize_labs_table(df: pd.DataFrame):
-    """Make CSV flexible: accept several column name variants."""
-    col_map = {c.lower().strip(): c for c in df.columns}
-
-    def pick(*names):
-        for n in names:
-            if n in col_map:
-                return col_map[n]
-        return None
-
-    date_col = pick("date", "lab_date", "timestamp")
-    name_col = pick("lab", "lab_name", "test", "test_name")
-    value_col = pick("value", "result", "lab_value")
-    unit_col = pick("unit", "units")
-    ref_col = pick("reference_range", "ref_range", "range")
-
-    required = [date_col, name_col, value_col]
-    if any(x is None for x in required):
-        return None, "CSV must contain at least: date, lab_name, value (columns can be named date/lab/value too)."
-
-    labs = []
-    for _, row in df.iterrows():
-        labs.append({
-            "date": str(row[date_col]),
-            "lab_name": str(row[name_col]),
-            "value": str(row[value_col]),
-            "unit": "" if unit_col is None else str(row[unit_col]),
-            "reference_range": "" if ref_col is None else str(row[ref_col]),
-        })
-    return labs, None
-
-def build_timeline_json(stage_key: str, reason: str, labs: list, meds_before: list, meds_after: list, followups: list, pending_labs: list):
-    return {
-        "kidney_journey_stage": stage_key,
-        "recent_hospital_stay": {
-            "reason_for_admission": reason.strip()
-        } if reason.strip() else {},
-        "labs_over_time": labs,
-        "medications_before": meds_before,
-        "medications_after": meds_after,
-        "followup_appointments": followups,
-        "pending_labs": pending_labs,
-    }
 
 timeline = None
 error = None
 
+def normalize_labs(df):
+    labs = []
+    for _, r in df.iterrows():
+        labs.append({
+            "date": str(r.get("date", "")),
+            "lab_name": str(r.get("lab_name", "")),
+            "value": str(r.get("value", "")),
+            "unit": str(r.get("unit", "")),
+            "reference_range": str(r.get("reference_range", "")),
+        })
+    return labs
+
 if mode == "Fill a simple form":
     with st.form("patient_form"):
-        st.markdown("#### Why were you recently seen in the hospital or clinic? (optional)")
-        reason = st.text_input("Example: dehydration, high creatinine, swelling, routine transplant follow-up")
+        reason = st.text_input(
+            "Why were you recently seen in clinic or hospital? (optional)",
+            placeholder="Routine transplant follow-up, dehydration, lab review"
+        )
 
-        st.markdown("#### Labs (add 1–6 results)")
-        st.caption("Keep it simple. Example: Creatinine 1.6 mg/dL on 2026-01-08.")
-        lab_rows = st.data_editor(
-            [
-                {"date": "", "lab_name": "", "value": "", "unit": "", "reference_range": ""},
-            ],
+        st.markdown("### Labs")
+        labs_table = st.data_editor(
+            [{"date": "", "lab_name": "", "value": "", "unit": "", "reference_range": ""}],
             num_rows="dynamic",
             use_container_width=True
         )
 
-        st.markdown("#### Medications (optional)")
-        col1, col2 = st.columns(2)
-        with col1:
-            meds_before_text = st.text_area("Before (one per line)", height=120, placeholder="Tacrolimus 1mg\nPrednisone 5mg")
-        with col2:
-            meds_after_text = st.text_area("After (one per line)", height=120, placeholder="Tacrolimus 2mg\nPrednisone 5mg")
-
-        st.markdown("#### Follow-ups & open loops (optional)")
-        followups_text = st.text_area("Upcoming appointments / instructions (one per line)", height=100,
-                                      placeholder="Nephrology follow-up in 1 week\nRepeat labs on Monday")
-        pending_labs_text = st.text_area("Pending labs / results (one per line)", height=80,
-                                         placeholder="Tacrolimus level\nUrine culture")
-
-        submitted = st.form_submit_button("Create my timeline")
+        submitted = st.form_submit_button("Create timeline")
 
     if submitted:
-        labs = []
-        for r in lab_rows:
-            if str(r.get("date", "")).strip() and str(r.get("lab_name", "")).strip() and str(r.get("value", "")).strip():
-                labs.append({
-                    "date": str(r.get("date", "")).strip(),
-                    "lab_name": str(r.get("lab_name", "")).strip(),
-                    "value": str(r.get("value", "")).strip(),
-                    "unit": str(r.get("unit", "")).strip(),
-                    "reference_range": str(r.get("reference_range", "")).strip(),
-                })
-
-        if len(labs) == 0:
-            error = "Please add at least one lab result (date, lab name, value)."
+        labs = [r for r in labs_table if r["lab_name"] and r["value"]]
+        if not labs:
+            error = "Please add at least one lab result."
         else:
-            meds_before = [x.strip() for x in meds_before_text.splitlines() if x.strip()]
-            meds_after = [x.strip() for x in meds_after_text.splitlines() if x.strip()]
-            followups = [x.strip() for x in followups_text.splitlines() if x.strip()]
-            pending_labs = [x.strip() for x in pending_labs_text.splitlines() if x.strip()]
-
-            timeline = build_timeline_json(stage, reason, labs, meds_before, meds_after, followups, pending_labs)
+            timeline = {
+                "kidney_journey_stage": stage,
+                "recent_hospital_stay": {"reason_for_admission": reason} if reason else {},
+                "labs_over_time": labs,
+                "medications_before": [],
+                "medications_after": [],
+                "followup_appointments": [],
+                "pending_labs": [],
+            }
 
 else:
-    st.markdown("#### Upload a file")
-    st.caption("Accepted: CSV of labs OR JSON timeline. We'll convert it into the NephroBridge timeline format.")
-
     uploaded = st.file_uploader("Upload CSV or JSON", type=["csv", "json"])
-
-    st.markdown("#### (Optional) Why were you seen in hospital/clinic?")
-    reason = st.text_input("Example: dehydration, high creatinine, swelling")
-
-    if uploaded is not None:
-        suffix = uploaded.name.lower().split(".")[-1]
-
+    if uploaded:
         try:
-            if suffix == "json":
-                raw = json.load(uploaded)
-                # If it already looks like our timeline, accept it.
-                if isinstance(raw, dict) and "labs_over_time" in raw and "kidney_journey_stage" in raw:
-                    timeline = raw
-                    # override stage from UI if user selected one
-                    timeline["kidney_journey_stage"] = stage
-                    if reason.strip():
-                        timeline["recent_hospital_stay"] = {"reason_for_admission": reason.strip()}
-                else:
-                    error = "JSON uploaded, but it doesn't look like a NephroBridge timeline. Use the template below."
+            if uploaded.name.endswith(".json"):
+                timeline = json.load(uploaded)
+                timeline["kidney_journey_stage"] = stage
             else:
                 df = pd.read_csv(uploaded)
-                labs, err = normalize_labs_table(df)
-                if err:
-                    error = err
-                else:
-                    timeline = build_timeline_json(stage, reason, labs, [], [], [], [])
+                timeline = {
+                    "kidney_journey_stage": stage,
+                    "labs_over_time": normalize_labs(df),
+                }
         except Exception as e:
-            error = f"Could not read file: {e}"
+            error = str(e)
 
-st.divider()
-
+# --------------------------------------------------
+# PREVIEW
+# --------------------------------------------------
 if error:
     st.error(error)
 
 if timeline:
-    st.success("Timeline created ✅")
-    colA, colB = st.columns([2, 1])
+    st.success("Timeline created")
+    st.json(timeline)
 
-    with colA:
-        st.markdown("### Preview (this is what the agents will read)")
-        st.json(timeline)
+    st.divider()
 
-    with colB:
-        st.markdown("### Save")
-        if st.button("Save as DATA/patient_timeline_user.json"):
-            OUTPUT_PATH.write_text(json.dumps(timeline, indent=2))
-            st.success(f"Saved to {OUTPUT_PATH}")
+    # --------------------------------------------------
+    # AGENT ORCHESTRATION
+    # --------------------------------------------------
+    st.markdown("## 3️⃣ AI explanations (powered by MedGemma)")
 
-    st.markdown("### Template you can copy (JSON)")
-    template = {
-        "kidney_journey_stage": "post_transplant | advanced_ckd | dialysis",
-        "recent_hospital_stay": {"reason_for_admission": "optional"},
-        "labs_over_time": [
-            {"date": "YYYY-MM-DD", "lab_name": "Creatinine", "value": "1.6", "unit": "mg/dL", "reference_range": "0.6–1.3"}
-        ],
-        "medications_before": ["optional list"],
-        "medications_after": ["optional list"],
-        "followup_appointments": ["optional list"],
-        "pending_labs": ["optional list"],
-    }
-    st.code(json.dumps(template, indent=2), language="json")
+    if st.button("Explain my situation"):
+        with st.spinner("Running AI agents…"):
+            lab_out = run_lab_agent_from_timeline(timeline)
+            med_out = run_medication_agent(timeline)
+            follow_out = run_followup_agent(timeline)
+
+        col1, col2, col3 = st.columns(3)
+
+        with col1:
+            st.markdown("### 🧪 Lab Explanation")
+            st.write(lab_out)
+
+        with col2:
+            st.markdown("### 💊 Medication Changes")
+            st.write(med_out)
+
+        with col3:
+            st.markdown("### 🧾 Follow-ups & Open Loops")
+            st.write(follow_out)
 else:
-    st.info("Fill the form or upload a file to generate a timeline JSON preview.")
+    st.info("Add your information to begin.")
