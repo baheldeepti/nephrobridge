@@ -1,5 +1,7 @@
+streamlit
 torch
 transformers
 accelerate
 sentencepiece
-streamlit
+protobuf
+huggingface_hub
