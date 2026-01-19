@@ -2,14 +2,12 @@ import json
 import torch
 import gc
 import os
-from pathlib import Path
 from transformers import AutoTokenizer, AutoModelForCausalLM
 
 # --------------------------------------------------
-# CONFIG (Hackathon-compliant)
+# MODEL SELECTION (Hackathon-compliant)
 # --------------------------------------------------
 
-# 🔁 Automatically switch model based on environment
 USE_MEDGEMMA = os.getenv("USE_MEDGEMMA", "false").lower() == "true"
 
 MODEL_ID = (
@@ -18,24 +16,14 @@ MODEL_ID = (
     else "google/gemma-2b-it"
 )
 
-BASE_DIR = Path(__file__).resolve().parent
-DATA_DIR = BASE_DIR / "DATA"
-
-
-STAGE_TO_FILE = {
-    "post_transplant": "patient_timeline_post_transplant.json",
-    "advanced_ckd": "patient_timeline_advanced_ckd.json",
-    "dialysis": "patient_timeline_dialysis.json",
-}
-
-
 # --------------------------------------------------
-# Prompt Builder (stage-aware, reusable agent)
+# Prompt Builder — Patient-first, safety-aligned
 # --------------------------------------------------
-def build_user_prompt(stage: str, labs: list) -> str:
+
+def build_lab_prompt(stage: str, labs: list) -> str:
     lab_block = "\n".join(
-        f"- {r['date']}: {r['lab_name']} = {r['value']} {r['unit']} "
-        f"(ref {r['reference_range']})"
+        f"- {r['date']}: {r['lab_name']} = {r['value']} {r.get('unit','')} "
+        f"(ref {r.get('reference_range','')})"
         for r in labs
     )
 
@@ -43,62 +31,97 @@ def build_user_prompt(stage: str, labs: list) -> str:
         "post_transplant": "after a kidney transplant",
         "advanced_ckd": "with advanced chronic kidney disease",
         "dialysis": "while on dialysis",
-    }[stage]
+    }.get(stage, "during kidney care")
 
     return f"""
-You are explaining kidney lab trends to a patient {stage_phrase}.
+You are NephroBridge, a calm and supportive medical explanation assistant.
 
-LAB RESULTS (use exactly as provided):
+Your role is NOT to diagnose, NOT to give medical advice, and NOT to replace a clinician.
+Your only goal is to help a patient understand what their lab trends *might mean in general terms*
+so they feel less confused and less anxious.
+
+PATIENT CONTEXT:
+The patient is currently {stage_phrase}.
+
+LAB RESULTS (use exactly as provided, do not reinterpret or correct):
 {lab_block}
 
-RULES:
-- Do NOT diagnose or give medical instructions.
-- Do NOT comment on data formatting or correctness.
-- Do NOT explain your reasoning.
-- Be calm, supportive, and patient-friendly.
+STRICT SAFETY RULES:
+- Do NOT diagnose any condition.
+- Do NOT speculate about organ failure, rejection, or emergencies.
+- Do NOT assign blame or fault.
+- Do NOT give medical instructions or treatment advice.
+- Do NOT tell the patient to go to the ER or seek urgent care.
+- Do NOT explain your reasoning or how you generated the answer.
+- Do NOT mention uncertainty about the data format.
 
-Write ONLY patient-facing content using EXACTLY this structure
-and FILL ALL SECTIONS with real text:
+TONE & STYLE RULES:
+- Calm, supportive, non-alarmist.
+- Reassuring but honest.
+- Clear, simple language suitable for a patient reading on their phone.
+- Avoid medical jargon when possible.
+
+OUTPUT FORMAT RULES:
+- Write ONLY patient-facing content.
+- Use EXACTLY the following section headers.
+- Fill in ALL sections with real text.
+- Do NOT add extra sections.
+- Do NOT rename or reorder sections.
 
 🧠 Key takeaways
-- 
 
 🧬 What changed in your labs
 
 🔍 Common reasons this can happen {stage_phrase}
-- 
 
 💬 Helpful questions to ask your care team
-- 
 
 🛟 Safety note
 """.strip()
 
 
 # --------------------------------------------------
-# Sanitizer (final safety layer)
+# Output Sanitizer — Final safety net
 # --------------------------------------------------
-def sanitize(text: str) -> str:
+
+def sanitize_output(text: str) -> str:
     forbidden = [
         "<thought>", "<unused", "analysis", "reasoning",
-        "The user wants", "Model:", "Confidence"
+        "The user wants", "Model:", "Confidence",
+        "I am an AI", "I cannot diagnose"
     ]
+
     for bad in forbidden:
-        if bad.lower() in text.lower():
-            text = text[: text.lower().find(bad.lower())]
+        idx = text.lower().find(bad.lower())
+        if idx != -1:
+            text = text[:idx]
+
     return text.strip()
 
 
 # --------------------------------------------------
-# Agent Runner
+# Public Agent API — called from Streamlit
 # --------------------------------------------------
-def run_lab_agent(stage: str):
-    timeline_path = DATA_DIR / STAGE_TO_FILE[stage]
 
-    with open(timeline_path) as f:
-        timeline = json.load(f)
+def run_lab_agent_from_timeline(timeline: dict) -> str:
+    stage = timeline.get("kidney_journey_stage", "post_transplant")
+    labs = timeline.get("labs_over_time", [])
 
-    prompt = build_user_prompt(stage, timeline["labs_over_time"])
+    if not labs:
+        return (
+            "🧠 Key takeaways\n"
+            "- No lab results were provided, so there is nothing to interpret yet.\n\n"
+            "🧬 What changed in your labs\n"
+            "No lab trends are available.\n\n"
+            "🔍 Common reasons this can happen\n"
+            "Sometimes lab results are still pending or not yet entered.\n\n"
+            "💬 Helpful questions to ask your care team\n"
+            "- Are there recent lab results I should review?\n\n"
+            "🛟 Safety note\n"
+            "This tool cannot replace medical advice. Always follow your care team’s guidance."
+        )
+
+    prompt = build_lab_prompt(stage, labs)
 
     tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
     tokenizer.pad_token = tokenizer.eos_token
@@ -114,8 +137,9 @@ def run_lab_agent(stage: str):
         {
             "role": "system",
             "content": (
-                "You are NephroBridge, a patient-facing explanation assistant. "
-                "You explain medical information clearly without giving advice."
+                "You are NephroBridge. "
+                "You explain kidney-related lab information in a calm, supportive, "
+                "non-diagnostic, patient-friendly way."
             ),
         },
         {"role": "user", "content": prompt},
@@ -125,7 +149,7 @@ def run_lab_agent(stage: str):
         messages, tokenize=False, add_generation_prompt=True
     )
 
-    # 🔑 Force continuation
+    # Force safe continuation into patient text
     chat += "\n🧠 Key takeaways\n- "
 
     inputs = tokenizer(chat, return_tensors="pt", add_special_tokens=False)
@@ -133,7 +157,7 @@ def run_lab_agent(stage: str):
     with torch.no_grad():
         output = model.generate(
             **inputs,
-            max_new_tokens=180 if USE_MEDGEMMA else 250,
+            max_new_tokens=200 if USE_MEDGEMMA else 260,
             do_sample=False,
             num_beams=1,
             repetition_penalty=1.1,
@@ -143,7 +167,7 @@ def run_lab_agent(stage: str):
         )
 
     text = tokenizer.decode(output[0], skip_special_tokens=True)
-    text = sanitize(text)
+    text = sanitize_output(text)
 
     idx = text.find("🧠 Key takeaways")
     if idx != -1:
@@ -153,22 +177,3 @@ def run_lab_agent(stage: str):
     gc.collect()
 
     return text
-
-
-# --------------------------------------------------
-# CLI ENTRYPOINT
-# --------------------------------------------------
-if __name__ == "__main__":
-    print("\nWhich kidney journey stage are you in?")
-    print("Options: post_transplant | advanced_ckd | dialysis")
-
-    stage = input("Enter stage: ").strip().lower()
-
-    if stage not in STAGE_TO_FILE:
-        raise ValueError("Invalid stage")
-
-    print("\n" + "=" * 60)
-    print(f"NEPHROBRIDGE — {stage.upper()}")
-    print("=" * 60 + "\n")
-
-    print(run_lab_agent(stage))
