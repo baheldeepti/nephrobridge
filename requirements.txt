@@ -1,7 +1,21 @@
-streamlit
-torch
-transformers
-accelerate
-sentencepiece
-protobuf
-huggingface_hub
+# -------------------------------
+# NephroBridge — Hackathon Stack
+# -------------------------------
+
+# UI / App Framework
+streamlit>=1.31.0
+pandas>=2.1.0
+
+# Core ML stack (for MedGemma + Gemma)
+torch>=2.1.0
+transformers>=4.36.0
+accelerate>=0.25.0
+
+# Tokenization + HF model plumbing
+sentencepiece>=0.1.99
+protobuf>=4.25.0
+huggingface_hub>=0.20.0
+
+# Optional but recommended (stability + performance)
+safetensors>=0.4.0
+numpy>=1.24.0
